@@ -1,5 +1,5 @@
 #include <bls12-381/bls12-381.hpp>
-#ifdef __x86_64__
+#ifdef __x86_64_asm__
 #include <cpuid.h>
 #endif
 
@@ -8,7 +8,7 @@ using namespace std;
 namespace bls12_381
 {
 
-#ifdef __x86_64__
+#ifdef __x86_64_asm__
 void _add(fp* z, const fp* x, const fp* y)
 {
     // x86_64 calling convention (https://en.wikipedia.org/wiki/X86_calling_conventions#System_V_AMD64_ABI):
@@ -96,7 +96,7 @@ void _add(fp* z, const fp* x, const fp* y)
 }
 #endif
 
-#ifdef __x86_64__
+#ifdef __x86_64_asm__
 void _ladd(fp* z, const fp* x, const fp* y)
 {
     // x86_64 calling convention (https://en.wikipedia.org/wiki/X86_calling_conventions#System_V_AMD64_ABI):
@@ -136,7 +136,7 @@ void _ladd(fp* z, const fp* x, const fp* y)
 }
 #endif
 
-#ifdef __x86_64__
+#ifdef __x86_64_asm__
 void _double(fp* z, const fp* x)
 {
     // x86_64 calling convention (https://en.wikipedia.org/wiki/X86_calling_conventions#System_V_AMD64_ABI):
@@ -223,7 +223,7 @@ void _double(fp* z, const fp* x)
 }
 #endif
 
-#ifdef __x86_64__
+#ifdef __x86_64_asm__
 void _ldouble(fp* z, const fp* x)
 {
     // x86_64 calling convention (https://en.wikipedia.org/wiki/X86_calling_conventions#System_V_AMD64_ABI):
@@ -263,7 +263,7 @@ void _ldouble(fp* z, const fp* x)
 }
 #endif
 
-#ifdef __x86_64__
+#ifdef __x86_64_asm__
 void _subtract(fp* z, const fp* x, const fp* y)
 {
     // x86_64 calling convention (https://en.wikipedia.org/wiki/X86_calling_conventions#System_V_AMD64_ABI):
@@ -342,7 +342,7 @@ void _subtract(fp* z, const fp* x, const fp* y)
 }
 #endif
 
-#ifdef __x86_64__
+#ifdef __x86_64_asm__
 void _lsubtract(fp* z, const fp* x, const fp* y)
 {
     // x86_64 calling convention (https://en.wikipedia.org/wiki/X86_calling_conventions#System_V_AMD64_ABI):
@@ -382,7 +382,7 @@ void _lsubtract(fp* z, const fp* x, const fp* y)
 }
 #endif
 
-#ifdef __x86_64__
+#ifdef __x86_64_asm__
 void __negate(fp* z, const fp* x)
 {
     // x86_64 calling convention (https://en.wikipedia.org/wiki/X86_calling_conventions#System_V_AMD64_ABI):
@@ -436,7 +436,7 @@ void _negate(fp* z, const fp* x)
 }
 #endif
 
-#ifdef __x86_64__
+#ifdef __x86_64_asm__
 void __multiply(fp* z, const fp* x, const fp* y)
 {
     // x86_64 calling convention (https://en.wikipedia.org/wiki/X86_calling_conventions#System_V_AMD64_ABI):
@@ -1490,25 +1490,6 @@ static bool cpu_has_bmi2_and_adx() {
     return false;
 }
 
-#ifdef __ELF__
-extern "C" char** _dl_argv;
-
-extern "C" blsmul_func_t __attribute__((no_sanitize_address)) resolve_blsmul() {
-    int argc = *(int*)(_dl_argv - 1);
-    char** my_environ = (char**)(_dl_argv + argc + 1);
-    while(*my_environ != nullptr) {
-       const char disable_str[] = "BLS_DISABLE_BMI2";
-        if(strncmp(*my_environ++, disable_str, strlen(disable_str)) == 0)
-           return __multiply;
-    }
-
-    if(cpu_has_bmi2_and_adx())
-       return __mul_ex;
-    return __multiply;
-}
-
-void _multiply(fp*, const fp*, const fp*) __attribute__((ifunc("resolve_blsmul")));
-#else
 blsmul_func_t _multiply = __multiply;
 
 struct bls_mul_init {
@@ -1519,7 +1500,7 @@ struct bls_mul_init {
 };
 static bls_mul_init the_bls_mul_init;
 
-#endif //__ELF__
+
 #else
 void _multiply(fp* z, const fp* x, const fp* y)
 {
@@ -1643,7 +1624,7 @@ void _multiply(fp* z, const fp* x, const fp* y)
 }
 #endif
 
-#ifdef __x86_64__
+#ifdef __x86_64_asm__
 void _square(fp* z, const fp* x)
 {
     #ifdef __clang__
@@ -1807,9 +1788,23 @@ tuple<uint64_t, uint64_t> Mul64(
     const uint64_t& y
 )
 {
+    #if defined(USE_INT128)
     uint128_t result = static_cast<uint128_t>(x) * static_cast<uint128_t>(y);
     uint64_t lo = result;
     uint64_t hi = result >> 64;
+    #else
+    uint64_t lo, hi, mid = 0;
+    uint64_t lo_carry, hi_carry, mid_carry = 0;
+    uint64_t hix = x >> 32;
+    uint64_t lox = x & 0xFFFFFFFF;
+    uint64_t hiy = y >> 32;
+    uint64_t loy = y & 0xFFFFFFFF;
+    tie(mid, mid_carry) = Add64(hix * loy, hiy * lox, 0);
+    tie(lo, lo_carry) = Add64(lox * loy, (mid & 0xFFFFFFFF) << 32, 0);
+    lo_carry += mid_carry << 32;
+    tie(hi, hi_carry) = Add64(hix * hiy, mid >> 32, lo_carry);
+    #endif
+
     return {hi, lo};
 }
 

@@ -255,6 +255,7 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
     static const valtype vchFalse(0);
     static const valtype vchZero(0);
     static const valtype vchTrue(1, 1);
+    bool zkpOpIsUsed = false;
 
     CScript::const_iterator pc = script.begin();
     CScript::const_iterator pend = script.end();
@@ -1025,8 +1026,16 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                     }
                 }
                 break;
-                case OP_CHECKGROTH16VERIFY:
+                case OP_CHECKZKPVERIFY:
                 {
+                    if (zkpOpIsUsed)
+                    {
+                        return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+                    }else
+                    {
+                        zkpOpIsUsed = true;
+                    }
+                    
                     // Ensure stack has enough elements for the groth16 proof verification
                     if (stack.size() < 12)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
@@ -1043,8 +1052,8 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     }
 
-                    // Only modes 0 and 1 are implemented; others return an error
-                    if(mode.getint() != 1 && mode.getint() != 0){
+                    // Only modes 1 is implemented; Mode 0 is deprecated; others return an error
+                    if(mode.getint() != 1){
                         // TODO: Implement mode 2 and 3
                         return set_error(serror, SCRIPT_ERR_SIG_DER);
                     }
@@ -1056,12 +1065,6 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
                     valtype& verfierDataB = stacktop(-6);
                     valtype& verfierDataA = stacktop(-7);
 
-                    /* TODO: drop the proof?
-                    // Drop the signature in pre-segwit scripts but not segwit scripts
-                    if (sigversion == SIGVERSION_BASE) {
-                        scriptCode.FindAndDelete(CScript(vchSig));
-                    }
-                    */
                     valtype publicInput1(32); // Initialize a 32-byte array for tx_hash
                     if(mode.getint()==1){
                         CScript scriptCode(pbegincodehash, pend);
@@ -1085,21 +1088,26 @@ bool EvalScript(vector<vector<unsigned char> >& stack, const CScript& script, un
 
                     // Deserialize the proof and verifier key input
                     bls12_381_groth16::Groth16ProofWith2PublicInputs proof;
-                    bls12_381_groth16::Groth16VerifierKeyInput vk;
-                    bls12_381_groth16::Groth16VerifierKeyPrecomputedValues precomputed;
+                    static bls12_381_groth16::Groth16VerifierKeyInput vk;
+                    static bls12_381_groth16::Groth16VerifierKeyPrecomputedValues precomputed;
+                    static valtype verfierDataACopy;
 
                     // Check the proof and verifier key deserialization
                     if(!bls12_381_groth16::deserializeProofWith2PublicInputs(&proof, &piA, &piB0, &piB1, &piC, &public_input_0, &public_input_1)){
                         return set_error(serror, SCRIPT_ERR_CHECKMULTISIGVERIFY);
                     }
 
-                    if(!bls12_381_groth16::deserializeVerifierKeyInput(&vk, &verfierDataA, &verfierDataB, &verfierDataC, &verfierDataD, &verfierDataE, &verfierDataF)){
-                        return set_error(serror, SCRIPT_ERR_CHECKMULTISIGVERIFY);
-                    }
+                    if (verfierDataA.size() != verfierDataACopy.size() || !std::equal(verfierDataA.begin(), verfierDataA.end(), verfierDataACopy.begin()))
+                    {
+                        verfierDataACopy = verfierDataA;
+                        if(!bls12_381_groth16::deserializeVerifierKeyInput(&vk, &verfierDataA, &verfierDataB, &verfierDataC, &verfierDataD, &verfierDataE, &verfierDataF)){
+                            return set_error(serror, SCRIPT_ERR_CHECKMULTISIGVERIFY);
+                        }
 
-                    // Precompute the verifier key
-                    if(!bls12_381_groth16::precomputeVerifierKey(&precomputed, &vk)){
-                        return set_error(serror, SCRIPT_ERR_CHECKMULTISIGVERIFY);
+                        // Precompute the verifier key
+                        if(!bls12_381_groth16::precomputeVerifierKey(&precomputed, &vk)){
+                            return set_error(serror, SCRIPT_ERR_CHECKMULTISIGVERIFY);
+                        }
                     }
 
                     // Verify the proof
